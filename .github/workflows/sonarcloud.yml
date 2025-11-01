@@ -6,6 +6,7 @@ on:
       - main
       - master
       - develop
+      - 'claude/**'
   pull_request:
     types: [opened, synchronize, reopened]
 
