@@ -23,21 +23,36 @@ Real-time 3D solar system and procedural-galaxy simulator in Go, using raylib fo
 
 ```bash
 go mod download
-go run .             # NOT `go run main.go` — sources span multiple files
+go run .                              # NOT `go run main.go` — sources span multiple files
 go build -o gostarmap
-./gostarmap          # run from the repo root; shaders are loaded via relative paths
+./gostarmap                           # run from the repo root; shaders are loaded via relative paths
+./gostarmap --width 2560 --height 1440 --stars 250000
+./gostarmap --fullscreen
 ```
+
+### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--width N` | `1920` | Initial window width |
+| `--height N` | `1080` | Initial window height |
+| `--stars N` | `100000` | Procedural background star count |
+| `--fullscreen` | off | Open fullscreen at the requested resolution |
+
+The window is resizable; the HUD reflows when you drag the edges.
 
 ## Controls
 
-**Camera**
+**Camera and navigation**
 
 | Key | Action |
 |-----|--------|
 | `WASD` | Move horizontally |
 | `Space` / `Left Ctrl` | Up / down |
 | `Shift` | Speed boost (scales with distance from origin) |
-| Mouse | Look |
+| Mouse | Look (yaw/pitch, pitch clamped to ±89°) |
+| `F` | Teleport to whatever the reticle is targeting (planet or Sun) |
+| `C` | Toggle constellation lines from Sun to nearby named stars |
 | `Tab` | Toggle stats overlay |
 | `Esc` | Exit |
 
@@ -47,6 +62,8 @@ go build -o gostarmap
 |-----|--------|
 | `P` | Pause / resume |
 | `[` / `]` | Halve / double speed |
+| `\` | Reverse time direction |
+| `J` | Jump to J2000.0 epoch (reset clock) |
 | `1`–`5` | Speed presets (1 day/sec → 1 year/sec) |
 
 **Lighting**
@@ -63,10 +80,23 @@ go build -o gostarmap
 ## Project layout
 
 - `main.go` — types (`Star`, `Planet`, `Galaxy`), procedural galaxy generation, Sun and planet renderers, camera/input, game loop
-- `orbital_mechanics.go` — Newton-Raphson Kepler solver and JPL J2000.0 orbital elements for the 8 planets
-- `lighting_config.go` — `LightingConfig`, presets, keyboard hot-reload, shader uniform updates
-- `shaders/` — GLSL: Sun (HDR emission), planets (`planet_enhanced.fs`, falling back to `planet.fs`), and the bloom pipeline scaffolding
+- `lighting_config.go` — `LightingConfig`, preset table, keyboard hot-reload, shader uniform updates
+- `orbital/` — package: Newton-Raphson Kepler solver, JPL J2000.0 orbital elements, time-scale helpers (with tests)
+- `internal/celestial/` — package: pure-Go helpers (`SpectralType`, `RandomType`, `FormatNumber`) split out so they're testable without raylib on the path
+- `shaders/` — GLSL: Sun (HDR emission), planets (`planet_enhanced.fs`, falling back to `planet.fs`)
 - `CLAUDE.md` — guidance for Claude Code instances working in this repo
+
+## Tests and lint
+
+```bash
+go test ./orbital/... ./internal/...   # pure-Go subpackages — no raylib needed
+go vet ./...
+golangci-lint run                      # config in .golangci.yml
+```
+
+Tests in `package main` can't run in a headless environment because raylib-go's
+loader pulls in the native library at package init. CI runs the subpackage
+tests only (`.github/workflows/lint.yml`).
 
 ## Accuracy notes
 

@@ -2,46 +2,51 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Note on the README
-
-`README.md` is stale. It describes a much smaller "star distance toy." The actual code is a real-time 3D solar-system + procedural-galaxy simulator with custom shaders, Keplerian orbital mechanics, and runtime-tunable lighting. Trust the source over the README.
-
 ## Build / run
 
-This is a single `package main` spread across three files in the repo root, plus GLSL shaders in `shaders/`. The files reference each other's symbols, so:
-
 ```bash
-go run .          # NOT `go run main.go` — that fails with undefined refs
+go run .                              # NOT `go run main.go` — sources span multiple files
 go build -o gostarmap
-./gostarmap       # must be invoked from the repo root; shaders are loaded via relative paths like "shaders/sun.vs"
+./gostarmap                           # run from the repo root; shaders load via relative paths
+./gostarmap --width 2560 --height 1440 --stars 250000 --fullscreen
 go vet ./...
-go test ./...     # no *_test.go files exist yet — passes vacuously
+go test ./orbital/... ./internal/...  # only the headless-friendly subpackages
 ```
 
-Dependency: `github.com/gen2brain/raylib-go/raylib` v0.55.1, which is **cgo** — first build is slow and needs a C compiler + OpenGL headers (MinGW/MSVC on Windows, build-essential + libgl/libxi/libxrandr/libxcursor/libxinerama dev packages on Linux). Go 1.21.
+Dependency: `github.com/gen2brain/raylib-go/raylib` v0.55.1 via the **purego** loader, not cgo — the binary dlopens `raylib.dll` (Windows) / `libraylib.so` / `libraylib.dylib` at runtime. First build needs a C compiler regardless (Go's runtime). Go 1.21.
 
 ## Architecture
 
-Three source files, one package:
+Three Go modules in this repo:
 
-- **`main.go`** — entry point and most of the engine. Contains: `Star` / `Planet` / `Galaxy` types, `GenerateGalaxy` (procedural 100k-star galactic disk + bulge + spiral arms, plus 8 planets and ~9 hand-named nearby stars), the Sun and Planet shader renderers (`InitSunRenderer` / `InitPlanetRenderer` / `RenderAllPlanets` / `RenderSunWithBloom`), star LOD (`RenderStarLOD`), camera input, `CheckTargeting` reticle hit-testing, and the main game loop.
-- **`orbital_mechanics.go`** — pure math, no rendering deps. Newton-Raphson Kepler solver (`SolveKeplerEquation`), `OrbitalElementsToPosition` (Keplerian → Cartesian), `GetPlanetaryElements` (hard-coded JPL Horizons J2000.0 elements for the 8 planets), `TimeScaleInfo` + `UpdateSimulationTime`, and `PositionToRenderUnits`.
-- **`lighting_config.go`** — `LightingConfig` with 5 presets (Realistic / Cinematic / Educational / Stylized / Dark), keyboard hot-reload via `UpdateWithKeyboard`, and `ApplyToShader` which pushes ~13 uniforms to the planet shader each frame.
+- **`package main`** (root): `main.go` (~1300 lines) holds types (`Star` / `Planet` / `Galaxy`), `GenerateGalaxy(targetStars int)` (procedural 100k-star galactic disk + bulge + spiral arms, plus 8 planets and 9 hand-placed named stars), the Sun and planet shader renderers, star LOD, camera/input via yaw+pitch scalars, `CheckTargeting` reticle hit-testing, the `teleport` helper, and the main game loop. `lighting_config.go` holds `LightingConfig`, the `lightingPresets` map, keyboard hot-reload, and `ApplyToShader` (which uses uniform locations cached on `PlanetRenderData`).
+- **`orbital`**: Newton-Raphson Kepler solver, `OrbitalElementsToPosition`, JPL Horizons J2000.0 element tables, `TimeScaleInfo` + `UpdateSimulationTime`, `PositionToRenderUnits`. Has its own tests.
+- **`internal/celestial`**: `SpectralType` + Morgan-Keenan constants, `RandomType` (observed-distribution sampler), `FormatNumber`. Pure Go, no raylib import — split out so `go test` can run without raylib on the path. Has its own tests.
 
-`shaders/` contains GLSL: `sun.vs/fs`, `planet.vs/fs`, `planet_enhanced.fs` (preferred — `InitPlanetRenderer` falls back to `planet.fs` if it fails to load), `default.vs`, and the bloom pipeline (`bloom_extract.fs` / `bloom_blur.fs` / `bloom_composite.fs`).
+`shaders/` contains GLSL: `sun.vs/fs`, `planet.vs/fs`, `planet_enhanced.fs` (preferred — `InitPlanetRenderer` falls back to `planet.fs` if it fails to load), `default.vs`. The `bloom_*.fs` files exist but their loader was removed when the dead bloom pipeline was deleted; they're staged for a future re-implementation.
 
 ## Coordinate and scale conventions (easy to break)
 
-- Astronomy uses **Z-up**, raylib uses **Y-up**. `PositionToRenderUnits` swaps Y↔Z on output. Anything that bridges orbital math and raylib coordinates must go through it.
-- `AUScale = 150.0` render units per AU. Stars are scaled by `lyScale = 50.0` units per light-year (defined locally in `GenerateGalaxy`). The Sun sits at the origin with radius `SunRadiusUnits = 32.7` (109× Earth, but compressed against the 150 units/AU scale — *not* physically self-consistent with the AU scale, deliberately, for navigability).
-- Simulation time is days since the **J2000.0 epoch** (Jan 1 2000, 12:00 TT). `TimeScale.TimeScale` is sim-days per real-second; planet positions are re-solved from Keplerian elements every frame in `UpdatePlanetPositions`.
+- Astronomy uses **Z-up**, raylib uses **Y-up**. `orbital.PositionToRenderUnits` swaps Y↔Z on output. Anything that bridges orbital math and raylib coordinates must go through it.
+- `AUScale = 150.0` render units per AU. Stars are scaled by `lyScale = 50.0` units per light-year (local const in `GenerateGalaxy`). The Sun sits at the origin with radius `SunRadiusUnits = 32.7` — *not* physically self-consistent with the AU scale, deliberately, for navigability.
+- Simulation time is days since the **J2000.0 epoch** (Jan 1 2000, 12:00 TT). `TimeScale.TimeScale` is sim-days per real-second and may be **negative** (reverse time). The `[/]` clamp uses `|TimeScale|`. The `J` key resets `SimulationDays` to 0.
+
+## Camera
+
+Yaw and pitch are tracked as scalars (`yaw`, `pitch` locals in `main`). Each frame: mouse delta → update yaw/pitch → clamp pitch to ±~89.4° → derive `forward` (full 3D) and `right` (horizontal-only, derived from yaw alone). WASD moves `Position`; `Target` is rebuilt from `Position + forward` afterwards. This avoids the cross-product gimbal lock at zenith/nadir and keeps strafe motion level regardless of pitch.
 
 ## Performance shape
 
-Designed around a 60 FPS budget at 1920×1080. The galaxy holds 100k stars but `maxStarsPerFrame = 15000` and `maxRenderDistance = 20000` cull aggressively in the main loop. Star LOD has four bands (full sphere → smaller sphere → tiny sphere → `DrawPoint3D`). Planet LOD reuses three pre-built sphere meshes (32/24/16 rings·slices) cached on `PlanetRenderData`. Bloom render textures are half-resolution.
-
-Note: `RenderSunWithBloom` currently bypasses the bloom post-process and just calls `RenderSun` directly — the bloom textures are loaded but the multi-pass pipeline is a TODO in code.
+60 FPS budget at 1920×1080. The galaxy holds up to 100k stars but `MaxStarsPerFrame = 15000` and `MaxRenderDistance = 20000` cull aggressively in the main loop. Star LOD has four bands (full sphere → smaller sphere → tiny sphere → `DrawPoint3D`). `Star.Color` is precomputed at generation, so the per-frame star path doesn't do map lookups. Planet LOD reuses three pre-built sphere meshes (32/24/16 rings·slices) cached on `PlanetRenderData`. Per-frame planet shader uniforms split: globals (sunPosition, cameraPosition, lighting config) are written once before the per-planet loop; only color/radius/rotation are per-planet. Planet position/rotation updates are skipped while paused.
 
 ## CI
 
-`.github/workflows/sonarcloud.yml` runs `go test -coverprofile=coverage.out` (with `continue-on-error`) and uploads to SonarCloud on pushes to `main` / `master` / `develop` / `claude/**` and on PRs. Project key is `ctclostio_GoStarMap`. There are no tests yet, so coverage will read as 0%.
+- `.github/workflows/lint.yml` runs `golangci-lint` (config in `.golangci.yml`) and `go test ./orbital/... ./internal/...` on push/PR.
+- `.github/workflows/sonarcloud.yml` runs `go test -coverprofile=coverage.out` (with `continue-on-error`) and uploads to SonarCloud. Tests in `package main` won't run in CI because of the raylib loader; only the subpackage tests contribute to coverage.
+
+## When extending
+
+- New testable helpers that don't need raylib should live in `internal/celestial` (or a sibling `internal/...` package) so they stay testable in CI.
+- New orbital-math features go in `orbital`. Keep that package raylib-free.
+- New time-system features must respect that `TimeScale` can be negative.
+- New camera features must update both `yaw`/`pitch` and `camera.Target`/`Position` (the `teleport` helper is the model).
