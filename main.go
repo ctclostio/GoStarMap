@@ -6,6 +6,8 @@ import (
 	"math/rand"
 	"strings"
 
+	"github.com/ctclostio/GoStarMap/orbital"
+	
 	rl "github.com/gen2brain/raylib-go/raylib"
 )
 
@@ -43,6 +45,7 @@ type Star struct {
 	SpectralType  SpectralType // Spectral classification
 	Name          string       // Name (if notable)
 	IsNamed       bool         // Whether this star has a name
+	Color         rl.Color    // Precomputed color based on spectral type
 }
 
 // Planet represents a planet with scientific data and orbital mechanics
@@ -54,7 +57,7 @@ type Planet struct {
 	MassKg          float64         // Mass in kilograms
 	DiameterKm      float64         // Diameter in kilometers
 	Description     string          // Brief description
-	OrbitalElements OrbitalElements // Keplerian orbital parameters
+	OrbitalElements orbital.OrbitalElements // Keplerian orbital parameters
 
 	// Rotation parameters (NASA Planetary Fact Sheet validated)
 	RotationPeriodDays float64 // Sidereal rotation period (negative if retrograde)
@@ -66,7 +69,7 @@ type Planet struct {
 type Galaxy struct {
 	Stars        []Star
 	Planets      []Planet
-	TimeScale    TimeScaleInfo // Simulation time control
+	TimeScale    orbital.TimeScaleInfo // Simulation time control
 }
 
 // NewGalaxy creates a new galaxy with initial time set to J2000.0 epoch
@@ -74,7 +77,7 @@ func NewGalaxy() *Galaxy {
 	return &Galaxy{
 		Stars:   make([]Star, 0),
 		Planets: make([]Planet, 0),
-		TimeScale: TimeScaleInfo{
+		TimeScale: orbital.TimeScaleInfo{
 			SimulationDays: 0.0,    // Start at J2000.0 epoch (January 1, 2000, 12:00 TT)
 			TimeScale:      365.256 / 60.0, // Default: Earth completes orbit in 60 seconds
 			IsPaused:       false,
@@ -82,25 +85,25 @@ func NewGalaxy() *Galaxy {
 	}
 }
 
-// GetRandomSpectralType returns a spectral type based on realistic distribution
+// GetRandomSpectralType returns a spectral type based on realistic distribution.
+// Cumulative thresholds chosen so per-bin shares match observed Milky Way ratios:
+// O 0.003%, B 0.13%, A 0.6%, F 3%, G 7.6%, K 12.1%, M ~76.6% (remainder).
 func GetRandomSpectralType() SpectralType {
-	// Realistic distribution: M stars are most common, O stars are rarest
-	// Based on stellar population statistics (cumulative percentages)
 	r := rand.Float32()
 	switch {
-	case r < 0.00003: // 0.003% O stars (very rare, massive, blue supergiants)
+	case r < 0.00003:
 		return TypeO
-	case r < 0.0013: // 0.13% B stars (rare, blue-white, hot)
+	case r < 0.00133:
 		return TypeB
-	case r < 0.006: // 0.6% A stars (white, hotter than Sun)
+	case r < 0.00733:
 		return TypeA
-	case r < 0.03: // 3% F stars (yellow-white, slightly hotter than Sun)
+	case r < 0.03733:
 		return TypeF
-	case r < 0.076: // 7.6% G stars (yellow, like our Sun)
+	case r < 0.11333:
 		return TypeG
-	case r < 0.197: // 12.1% K stars (orange, cooler than Sun)
+	case r < 0.23433:
 		return TypeK
-	default: // 76% M stars (red dwarfs, most common in galaxy)
+	default:
 		return TypeM
 	}
 }
@@ -115,6 +118,7 @@ func (g *Galaxy) AddNamedStar(name string, x, y, z float64, mag float32, stype S
 		SpectralType: stype,
 		Name:         name,
 		IsNamed:      true,
+		Color:        GetSpectralColor(stype), // Precompute color
 	})
 }
 
@@ -153,13 +157,13 @@ func GenerateGalaxy() *Galaxy {
 	// Initialize planets with validated orbital elements
 	for _, p := range planets {
 		// Get validated orbital elements from JPL data
-		elements := GetPlanetaryElements(p.name)
+		elements := orbital.GetPlanetaryElements(p.name)
 
 		// Calculate initial position at J2000.0 epoch (time = 0)
-		positionAU := OrbitalElementsToPosition(elements, 0.0)
+		positionAU := orbital.OrbitalElementsToPosition(elements, 0.0)
 
 		// Convert to render units (AU to your scale)
-		renderPos := PositionToRenderUnits(positionAU, AUScale)
+		renderPos := orbital.PositionToRenderUnits(positionAU, AUScale)
 
 		g.Planets = append(g.Planets, Planet{
 			Name:               p.name,
@@ -266,6 +270,7 @@ func GenerateGalaxy() *Galaxy {
 			Z:            z,
 			Magnitude:    mag,
 			SpectralType: stype,
+			Color:        GetSpectralColor(stype), // Precompute color
 			IsNamed:      false,
 		})
 	}
@@ -276,7 +281,7 @@ func GenerateGalaxy() *Galaxy {
 
 // GetCameraSpeed returns camera speed - normal by default, boosted when shift is held
 func GetCameraSpeed(camera rl.Camera3D, shiftHeld bool) float32 {
-	baseSpeed := float32(0.5)
+	baseSpeed := float32(CameraBaseSpeed)
 
 	// If shift is not held, just return normal speed
 	if !shiftHeld {
@@ -288,10 +293,10 @@ func GetCameraSpeed(camera rl.Camera3D, shiftHeld bool) float32 {
 		camera.Position.Y*camera.Position.Y +
 		camera.Position.Z*camera.Position.Z)))
 
-	if dist < 50 {
-		return baseSpeed * 3.0  // 3x boost for close range
+	if dist < CameraDistThreshold {
+		return baseSpeed * float32(CameraSpeedBoost)  // 3x boost for close range
 	}
-	return baseSpeed + dist*0.05  // Distance-based boost for far range
+	return baseSpeed + dist*float32(CameraDistBoost)  // Distance-based boost for far range
 }
 
 // RenderStarLOD renders a star with level-of-detail based on camera distance
@@ -304,7 +309,8 @@ func RenderStarLOD(star Star, cameraPos rl.Vector3) {
 	dz := starPos.Z - cameraPos.Z
 	dist := float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
 
-	color := GetSpectralColor(star.SpectralType)
+	// Use precomputed color from Star struct (set during generation)
+	color := star.Color
 
 	// Brightness factor based on magnitude (lower magnitude = brighter)
 	brightnessFactor := float32(math.Pow(2.512, float64(-star.Magnitude/5.0)))
@@ -319,15 +325,15 @@ func RenderStarLOD(star Star, cameraPos rl.Vector3) {
 
 	// LOD levels based on distance - much more aggressive
 	switch {
-	case dist < 100: // Very close - full sphere
+	case dist < StarLODClose: // Very close - full sphere
 		radius := 2.0 + brightnessFactor*1.0
 		rl.DrawSphere(starPos, radius, color)
 
-	case dist < 300: // Medium distance - medium sphere
+	case dist < StarLODMedium: // Medium distance - medium sphere
 		radius := 1.0 + brightnessFactor*0.4
 		rl.DrawSphere(starPos, radius, color)
 
-	case dist < 800: // Far - small sphere
+	case dist < StarLODFar: // Far - small sphere
 		rl.DrawSphere(starPos, 0.6, color)
 
 	default: // Everything else - single point (most efficient)
@@ -335,61 +341,52 @@ func RenderStarLOD(star Star, cameraPos rl.Vector3) {
 	}
 }
 
-// CheckTargeting determines if the camera is looking at a celestial body
-// Returns the targeted planet (or nil) and whether the Sun is targeted
+// targetCosThreshold is cos(2°) — vectors whose dot product exceeds this are
+// within 2° of the camera forward, so we can avoid acos in the hot path.
+var targetCosThreshold = float32(math.Cos(2.0 * math.Pi / 180.0))
+
+// CheckTargeting determines if the camera is looking at a celestial body.
+// Returns the targeted planet (or nil) and whether the Sun is targeted.
+// Compares cos(angle) directly instead of taking acos — angle < threshold
+// is equivalent to dot >= cos(threshold) for unit vectors, with no NaN risk.
 func CheckTargeting(camera rl.Camera3D, planets []Planet, sunPos rl.Vector3) (*Planet, bool) {
-	// Calculate camera forward direction
 	forward := rl.Vector3Subtract(camera.Target, camera.Position)
 	forward = rl.Vector3Normalize(forward)
 
-	// Targeting threshold (in degrees)
-	const targetThreshold = 2.0 // 2 degrees
-	thresholdRad := targetThreshold * math.Pi / 180.0
-
-	// Check Sun first
+	// Sun first
 	sunDir := rl.Vector3Subtract(sunPos, camera.Position)
-	sunDist := rl.Vector3Length(sunDir)
-	if sunDist > 0.01 {
+	if rl.Vector3Length(sunDir) > 0.01 {
 		sunDir = rl.Vector3Normalize(sunDir)
-		dotProduct := forward.X*sunDir.X + forward.Y*sunDir.Y + forward.Z*sunDir.Z
-		// Clamp dot product to valid range for acos to prevent NaN from floating-point errors
-		dotProduct = float32(math.Max(-1.0, math.Min(1.0, float64(dotProduct))))
-		angle := math.Acos(float64(dotProduct))
-		if angle < thresholdRad {
-			return nil, true // Sun is targeted
+		dot := forward.X*sunDir.X + forward.Y*sunDir.Y + forward.Z*sunDir.Z
+		if dot >= targetCosThreshold {
+			return nil, true
 		}
 	}
 
-	// Check each planet
 	for i := range planets {
 		planetPos := rl.Vector3{X: float32(planets[i].X), Y: float32(planets[i].Y), Z: float32(planets[i].Z)}
 		planetDir := rl.Vector3Subtract(planetPos, camera.Position)
-		planetDist := rl.Vector3Length(planetDir)
-
-		if planetDist > 0.01 {
+		if rl.Vector3Length(planetDir) > 0.01 {
 			planetDir = rl.Vector3Normalize(planetDir)
-			dotProduct := forward.X*planetDir.X + forward.Y*planetDir.Y + forward.Z*planetDir.Z
-			// Clamp dot product to valid range for acos to prevent NaN from floating-point errors
-			dotProduct = float32(math.Max(-1.0, math.Min(1.0, float64(dotProduct))))
-			angle := math.Acos(float64(dotProduct))
-			if angle < thresholdRad {
-				return &planets[i], false // Planet is targeted
+			dot := forward.X*planetDir.X + forward.Y*planetDir.Y + forward.Z*planetDir.Z
+			if dot >= targetCosThreshold {
+				return &planets[i], false
 			}
 		}
 	}
 
-	return nil, false // Nothing targeted
+	return nil, false
 }
 
 // DrawCelestialInfo displays information about a targeted celestial body
 func DrawCelestialInfo(screenWidth, screenHeight int32, planet *Planet, isSun bool) {
 	// Position the info box in the lower right quadrant
-	boxX := screenWidth - 420
-	boxY := screenHeight - 340
+	boxX := screenWidth - int32(UIInfoBoxWidth) - 20 // 20px margin
+	boxY := screenHeight - int32(UIInfoBoxHeight) - 20
 
 	// Draw semi-transparent background
-	rl.DrawRectangle(boxX, boxY, 400, 320, rl.NewColor(0, 0, 0, 200))
-	rl.DrawRectangleLines(boxX, boxY, 400, 320, rl.NewColor(100, 150, 255, 255))
+	rl.DrawRectangle(boxX, boxY, UIInfoBoxWidth, UIInfoBoxHeight, rl.NewColor(0, 0, 0, 200))
+	rl.DrawRectangleLines(boxX, boxY, UIInfoBoxWidth, UIInfoBoxHeight, rl.NewColor(100, 150, 255, 255))
 
 	yOffset := boxY + 15
 
@@ -454,20 +451,50 @@ func DrawCelestialInfo(screenWidth, screenHeight int32, planet *Planet, isSun bo
 }
 
 // formatNumber adds commas to numbers for readability
+// Handles negative numbers and preserves decimal places
 func formatNumber(num float64) string {
-	str := fmt.Sprintf("%.0f", num)
-	n := len(str)
+	// Format with up to 2 decimal places (strip trailing zeros)
+	str := fmt.Sprintf("%.2f", num)
+	
+	// Remove trailing zeros after decimal point, and trailing decimal point
+	if strings.Contains(str, ".") {
+		str = strings.TrimRight(strings.TrimRight(str, "0"), ".")
+	}
+	
+	// Handle negative numbers
+	prefix := ""
+	if strings.HasPrefix(str, "-") {
+		prefix = "-"
+		str = str[1:]
+	}
+	
+	// Split into integer and decimal parts
+	parts := strings.SplitN(str, ".", 2)
+	intPart := parts[0]
+	decPart := ""
+	if len(parts) > 1 {
+		decPart = "." + parts[1]
+	}
+	
+	// Add commas to integer part
+	n := len(intPart)
 	if n <= 3 {
-		return str
+		return prefix + intPart + decPart
 	}
-	result := ""
-	for i, c := range str {
+	
+	var result strings.Builder
+	result.Grow(n + n/3 + 2) // Pre-allocate space
+	result.WriteString(prefix)
+	
+	for i, c := range intPart {
 		if i > 0 && (n-i)%3 == 0 {
-			result += ","
+			result.WriteByte(',')
 		}
-		result += string(c)
+		result.WriteRune(c)
 	}
-	return result
+	
+	result.WriteString(decPart)
+	return result.String()
 }
 
 // UpdatePlanetPositions recalculates planet positions based on current simulation time
@@ -479,10 +506,10 @@ func UpdatePlanetPositions(galaxy *Galaxy) {
 		planet := &galaxy.Planets[i]
 
 		// Calculate position in AU based on orbital elements
-		positionAU := OrbitalElementsToPosition(planet.OrbitalElements, currentTime)
+		positionAU := orbital.OrbitalElementsToPosition(planet.OrbitalElements, currentTime)
 
 		// Convert to render coordinates
-		renderPos := PositionToRenderUnits(positionAU, AUScale)
+		renderPos := orbital.PositionToRenderUnits(positionAU, AUScale)
 
 		// Update planet position
 		planet.X = float64(renderPos[0])
@@ -557,6 +584,17 @@ type PlanetRenderData struct {
 	LocRotationAngle    int32
 	LocAxialTilt        int32
 
+	// Lighting config uniform locations (cached for performance)
+	LocSunColorTemp       int32
+	LocAmbientColorSat    int32
+	LocHemisphericAmbient int32
+	LocFresnelStrength    int32
+	LocTerminatorSoftness int32
+	LocRimLightStrength   int32
+	LocRimLightColor      int32
+	LocProximityWarmth    int32
+	LocProximityStrength  int32
+
 	// Cached sphere models (LOD - Level of Detail)
 	// These are created once and reused every frame for performance
 	SphereModelHigh   rl.Model // 32 rings/slices - close up
@@ -585,6 +623,41 @@ const (
 	PlanetSpecularGas    = 0.3   // Specular strength for gas giants (more reflective)
 	PlanetShininessRocky = 16.0  // Specular shininess for rocky planets (wider highlight)
 	PlanetShininessGas   = 64.0  // Specular shininess for gas giants (tighter highlight)
+)
+
+// Rendering constants
+const (
+	// Star rendering
+	MaxStarsPerFrame   = 15000  // Maximum stars rendered per frame
+	MaxRenderDistance   = 20000.0 // Maximum distance for star rendering (render units)
+	
+	// Star LOD distances (render units)
+	StarLODClose       = 100.0  // Full sphere
+	StarLODMedium      = 300.0  // Medium sphere
+	StarLODFar         = 800.0  // Small sphere
+	// Beyond StarLODFar: point rendering
+	
+	// Planet LOD screen sizes (fraction of screen)
+	PlanetLODClose     = 0.05  // High detail (32 rings/slices)
+	PlanetLODMedium    = 0.02  // Medium detail (24 rings/slices)
+	// Below PlanetLODMedium: low detail (16 rings/slices)
+	
+	// Camera speed
+	CameraBaseSpeed    = 0.5   // Base camera movement speed
+	CameraSpeedBoost   = 3.0   // Speed multiplier when shift is held (close range)
+	CameraDistBoost    = 0.05  // Distance-based speed boost factor
+	CameraDistThreshold = 50.0  // Distance threshold for speed boost
+)
+
+// UI Constants
+const (
+	UIInfoBoxWidth     = 400
+	UIInfoBoxHeight    = 320
+	UIReticleSize      = 10
+	UIReticleThickness = 2
+	UIReticleGap       = 4
+	UITimeBoxWidth     = 480
+	UITimeBoxHeight    = 110
 )
 
 // InitSunRenderer initializes all resources for Sun rendering with bloom
@@ -745,20 +818,28 @@ func InitPlanetRenderer() (*PlanetRenderData, error) {
 	planet.LocRotationAngle = rl.GetShaderLocation(planetShader, "rotationAngle")
 	planet.LocAxialTilt = rl.GetShaderLocation(planetShader, "axialTilt")
 
-	// Create and cache sphere models for LOD (Level of Detail)
-	// These are created once and reused every frame for maximum performance
-	// Radius of 1.0 is used as base - will be scaled when rendering
+	// Cache lighting config uniform locations (for performance)
+	planet.LocSunColorTemp = rl.GetShaderLocation(planetShader, "sunColorTemperature")
+	planet.LocAmbientColorSat = rl.GetShaderLocation(planetShader, "ambientColorSaturation")
+	planet.LocHemisphericAmbient = rl.GetShaderLocation(planetShader, "hemisphericAmbient")
+	planet.LocFresnelStrength = rl.GetShaderLocation(planetShader, "fresnelStrength")
+	planet.LocTerminatorSoftness = rl.GetShaderLocation(planetShader, "terminatorSoftness")
+	planet.LocRimLightStrength = rl.GetShaderLocation(planetShader, "rimLightStrength")
+	planet.LocRimLightColor = rl.GetShaderLocation(planetShader, "rimLightColor")
+	planet.LocProximityWarmth = rl.GetShaderLocation(planetShader, "proximityWarmth")
+	planet.LocProximityStrength = rl.GetShaderLocation(planetShader, "proximityWarmthStrength")
+
+	// Create and cache sphere models for LOD (Level of Detail).
+	// BeginShaderMode in RenderPlanet overrides any per-mesh material shader,
+	// so we don't bother assigning Materials.Shader here.
 	meshHigh := rl.GenMeshSphere(1.0, 32, 32)
 	planet.SphereModelHigh = rl.LoadModelFromMesh(meshHigh)
-	planet.SphereModelHigh.Materials.Shader = planetShader
 
 	meshMedium := rl.GenMeshSphere(1.0, 24, 24)
 	planet.SphereModelMedium = rl.LoadModelFromMesh(meshMedium)
-	planet.SphereModelMedium.Materials.Shader = planetShader
 
 	meshLow := rl.GenMeshSphere(1.0, 16, 16)
 	planet.SphereModelLow = rl.LoadModelFromMesh(meshLow)
-	planet.SphereModelLow.Materials.Shader = planetShader
 
 	planet.IsInitialized = true
 	fmt.Println("Planet renderer initialized successfully")
@@ -791,10 +872,11 @@ type PlanetRenderParams struct {
 	AxialTilt        float32 // Axial tilt in radians
 }
 
-// RenderPlanet renders a single planet with physically-based lighting
-// Expected cost: ~0.05ms per planet @ 1080p on RTX 3070 / GTX 1660
-// Bandwidth: ~1-2MB per planet (depends on screen coverage)
-func RenderPlanet(planet *PlanetRenderData, params PlanetRenderParams, sunPos rl.Vector3, camera rl.Camera3D) {
+// RenderPlanet renders a single planet with physically-based lighting.
+// Per-frame globals (sunPosition, cameraPosition) are expected to have been
+// set once by RenderAllPlanets — this function only writes per-planet uniforms.
+// Expected cost: ~0.05ms per planet @ 1080p on RTX 3070 / GTX 1660.
+func RenderPlanet(planet *PlanetRenderData, params PlanetRenderParams, camera rl.Camera3D) {
 	if !planet.IsInitialized {
 		// Fallback: render simple colored sphere
 		rl.DrawSphere(params.Position, params.Radius, params.Color)
@@ -808,17 +890,11 @@ func RenderPlanet(planet *PlanetRenderData, params PlanetRenderParams, sunPos rl
 		float32(params.Color.B) / 255.0,
 	}
 
-	// Set shader uniforms (per-planet parameters only)
-	// Note: Global lighting params (sunIntensity, ambientStrength, etc.) are set by lightingConfig.ApplyToShader()
-	rl.SetShaderValue(planet.Shader, planet.LocSunPosition, []float32{sunPos.X, sunPos.Y, sunPos.Z}, rl.ShaderUniformVec3)
+	// Per-planet uniforms only.
 	rl.SetShaderValue(planet.Shader, planet.LocPlanetColor, colorVec, rl.ShaderUniformVec3)
 	rl.SetShaderValue(planet.Shader, planet.LocPlanetRadius, []float32{params.Radius}, rl.ShaderUniformFloat)
-	// Removed: sunIntensity and ambientStrength - these come from lightingConfig now
 	rl.SetShaderValue(planet.Shader, planet.LocSpecularStrength, []float32{params.SpecularStrength}, rl.ShaderUniformFloat)
 	rl.SetShaderValue(planet.Shader, planet.LocShininess, []float32{params.Shininess}, rl.ShaderUniformFloat)
-	rl.SetShaderValue(planet.Shader, planet.LocCameraPosition, []float32{camera.Position.X, camera.Position.Y, camera.Position.Z}, rl.ShaderUniformVec3)
-
-	// Set rotation parameters
 	rl.SetShaderValue(planet.Shader, planet.LocRotationAngle, []float32{params.RotationAngle}, rl.ShaderUniformFloat)
 	rl.SetShaderValue(planet.Shader, planet.LocAxialTilt, []float32{params.AxialTilt}, rl.ShaderUniformFloat)
 
@@ -829,9 +905,9 @@ func RenderPlanet(planet *PlanetRenderData, params PlanetRenderParams, sunPos rl
 	// Select appropriate LOD model based on screen size
 	// Using cached models for maximum performance (created once at init)
 	var selectedModel rl.Model
-	if screenSize > 0.05 { // Close up - high detail (32 rings/slices)
+	if screenSize > PlanetLODClose { // Close up - high detail (32 rings/slices)
 		selectedModel = planet.SphereModelHigh
-	} else if screenSize > 0.02 { // Medium distance (24 rings/slices)
+	} else if screenSize > PlanetLODMedium { // Medium distance (24 rings/slices)
 		selectedModel = planet.SphereModelMedium
 	} else { // Far/small planet - low detail (16 rings/slices)
 		selectedModel = planet.SphereModelLow
@@ -844,13 +920,17 @@ func RenderPlanet(planet *PlanetRenderData, params PlanetRenderParams, sunPos rl
 	rl.EndShaderMode()
 }
 
-// RenderAllPlanets renders all planets in the solar system with proper lighting
-// Expected total cost: ~0.64ms for 8 planets @ 1080p (with enhanced lighting)
-// Note: Lighting parameters are set globally via lightingConfig.ApplyToShader()
-// This function only sets per-planet parameters (color, position, size)
+// RenderAllPlanets renders all planets in the solar system with proper lighting.
+// Sun position and camera position are uniform across all planets, so we write
+// them once here instead of repeating per-planet inside RenderPlanet.
+// Expected total cost: ~0.64ms for 8 planets @ 1080p (with enhanced lighting).
 func RenderAllPlanets(planetRenderer *PlanetRenderData, planets []Planet, sunPos rl.Vector3, camera rl.Camera3D) {
-	// Get lighting config from global state (passed via ApplyToShader before this call)
-	// Per-planet specular values are taken from constants (can be overridden by config)
+	if planetRenderer.IsInitialized {
+		rl.SetShaderValue(planetRenderer.Shader, planetRenderer.LocSunPosition,
+			[]float32{sunPos.X, sunPos.Y, sunPos.Z}, rl.ShaderUniformVec3)
+		rl.SetShaderValue(planetRenderer.Shader, planetRenderer.LocCameraPosition,
+			[]float32{camera.Position.X, camera.Position.Y, camera.Position.Z}, rl.ShaderUniformVec3)
+	}
 
 	for _, p := range planets {
 		// Determine if planet is a gas giant (affects specularity)
@@ -884,7 +964,7 @@ func RenderAllPlanets(planetRenderer *PlanetRenderData, planets []Planet, sunPos
 			AxialTilt:        axialTiltRad,
 		}
 
-		RenderPlanet(planetRenderer, params, sunPos, camera)
+		RenderPlanet(planetRenderer, params, camera)
 	}
 }
 
@@ -894,6 +974,7 @@ func main() {
 	screenHeight := int32(1080)
 
 	rl.InitWindow(screenWidth, screenHeight, "GoStarMap - 3D Galactic Navigation [100k Stars - Optimized]")
+	defer rl.CloseWindow()
 	rl.SetTargetFPS(60)
 
 	// Initialize camera - positioned to view Sun and inner planets
@@ -973,44 +1054,65 @@ func main() {
 
 	startTime := rl.GetTime()
 
+	// Track camera orientation as yaw/pitch scalars derived from the initial
+	// Position→Target direction. This avoids the forward×up gimbal lock when
+	// looking straight up or down, and keeps strafe motion horizontal.
+	initFwd := rl.Vector3Normalize(rl.Vector3Subtract(camera.Target, camera.Position))
+	yaw := float32(math.Atan2(float64(initFwd.X), float64(initFwd.Z)))
+	pitch := float32(math.Asin(float64(initFwd.Y)))
+	const mouseSensitivity = float32(0.003)
+	const maxPitch = float32(math.Pi/2 - 0.01) // clamp ~89.4° off the pole
+
 	// Main game loop
 	for !rl.WindowShouldClose() {
 		// Check if shift is held for speed boost
 		shiftHeld := rl.IsKeyDown(rl.KeyLeftShift) || rl.IsKeyDown(rl.KeyRightShift)
 		cameraSpeed := GetCameraSpeed(camera, shiftHeld)
 
-		// Camera controls
-		forward := rl.Vector3Subtract(camera.Target, camera.Position)
-		forward = rl.Vector3Normalize(forward)
+		// Mouse look — update yaw/pitch and clamp pitch to avoid the pole singularity.
+		mouseDelta := rl.GetMouseDelta()
+		yaw += mouseDelta.X * mouseSensitivity
+		pitch -= mouseDelta.Y * mouseSensitivity // mouse up = look up
+		if pitch > maxPitch {
+			pitch = maxPitch
+		} else if pitch < -maxPitch {
+			pitch = -maxPitch
+		}
 
-		right := rl.Vector3CrossProduct(forward, camera.Up)
-		right = rl.Vector3Normalize(right)
+		// Derive forward from yaw+pitch and a horizontal right from yaw alone.
+		// A horizontal right keeps strafe motion level regardless of pitch.
+		cp := float32(math.Cos(float64(pitch)))
+		forward := rl.Vector3{
+			X: cp * float32(math.Sin(float64(yaw))),
+			Y: float32(math.Sin(float64(pitch))),
+			Z: cp * float32(math.Cos(float64(yaw))),
+		}
+		right := rl.Vector3{
+			X: float32(math.Cos(float64(yaw))),
+			Y: 0,
+			Z: -float32(math.Sin(float64(yaw))),
+		}
 
-		// Movement
+		// Movement — only Position moves; Target is rebuilt from forward below.
 		if rl.IsKeyDown(rl.KeyW) {
 			camera.Position = rl.Vector3Add(camera.Position, rl.Vector3Scale(forward, cameraSpeed))
-			camera.Target = rl.Vector3Add(camera.Target, rl.Vector3Scale(forward, cameraSpeed))
 		}
 		if rl.IsKeyDown(rl.KeyS) {
 			camera.Position = rl.Vector3Subtract(camera.Position, rl.Vector3Scale(forward, cameraSpeed))
-			camera.Target = rl.Vector3Subtract(camera.Target, rl.Vector3Scale(forward, cameraSpeed))
 		}
 		if rl.IsKeyDown(rl.KeyD) {
 			camera.Position = rl.Vector3Add(camera.Position, rl.Vector3Scale(right, cameraSpeed))
-			camera.Target = rl.Vector3Add(camera.Target, rl.Vector3Scale(right, cameraSpeed))
 		}
 		if rl.IsKeyDown(rl.KeyA) {
 			camera.Position = rl.Vector3Subtract(camera.Position, rl.Vector3Scale(right, cameraSpeed))
-			camera.Target = rl.Vector3Subtract(camera.Target, rl.Vector3Scale(right, cameraSpeed))
 		}
 		if rl.IsKeyDown(rl.KeySpace) {
 			camera.Position.Y += cameraSpeed
-			camera.Target.Y += cameraSpeed
 		}
 		if rl.IsKeyDown(rl.KeyLeftControl) {
 			camera.Position.Y -= cameraSpeed
-			camera.Target.Y -= cameraSpeed
 		}
+		camera.Target = rl.Vector3Add(camera.Position, forward)
 
 		// Toggle stats with TAB
 		if rl.IsKeyPressed(rl.KeyTab) {
@@ -1059,53 +1161,12 @@ func main() {
 
 		// Update simulation time
 		frameTime := rl.GetFrameTime() // Real seconds elapsed this frame
-		UpdateSimulationTime(&galaxy.TimeScale, float64(frameTime))
+		orbital.UpdateSimulationTime(&galaxy.TimeScale, float64(frameTime))
 
-		// Update planet positions based on current time
-		UpdatePlanetPositions(galaxy)
-
-		// Update planet rotations based on current time
-		UpdatePlanetRotations(galaxy)
-
-		// Mouse look
-		mouseDelta := rl.GetMouseDelta()
-		sensitivity := float32(0.003)
-
-		if mouseDelta.X != 0 {
-			angle := mouseDelta.X * sensitivity
-			offset := rl.Vector3Subtract(camera.Target, camera.Position)
-			cosAngle := float32(math.Cos(float64(angle)))
-			sinAngle := float32(math.Sin(float64(angle)))
-
-			newX := offset.X*cosAngle - offset.Z*sinAngle
-			newZ := offset.X*sinAngle + offset.Z*cosAngle
-
-			camera.Target = rl.Vector3Add(camera.Position, rl.Vector3{X: newX, Y: offset.Y, Z: newZ})
-		}
-
-		if mouseDelta.Y != 0 {
-			angle := -mouseDelta.Y * sensitivity // Negative for natural mouse look
-			offset := rl.Vector3Subtract(camera.Target, camera.Position)
-
-			cosAngle := float32(math.Cos(float64(angle)))
-			sinAngle := float32(math.Sin(float64(angle)))
-
-			// Rotate forward vector around the camera's right vector (local space rotation)
-			// Using Rodrigues' rotation formula: v_rot = v*cos(θ) + (axis × v)*sin(θ)
-			forward := rl.Vector3Normalize(offset)
-
-			// Cross product: right × forward (perpendicular to both, creates the rotation plane)
-			crossProduct := rl.Vector3CrossProduct(right, forward)
-
-			// Apply rotation around right vector
-			newForward := rl.Vector3Add(
-				rl.Vector3Scale(forward, cosAngle),
-				rl.Vector3Scale(crossProduct, sinAngle),
-			)
-			newForward = rl.Vector3Normalize(newForward)
-
-			length := rl.Vector3Length(offset)
-			camera.Target = rl.Vector3Add(camera.Position, rl.Vector3Scale(newForward, length))
+		// Skip Kepler resolves while paused — positions are unchanged.
+		if !galaxy.TimeScale.IsPaused {
+			UpdatePlanetPositions(galaxy)
+			UpdatePlanetRotations(galaxy)
 		}
 
 		// Draw
@@ -1129,8 +1190,8 @@ func main() {
 		RenderAllPlanets(planetRenderer, galaxy.Planets, sunPos, camera)
 
 		// Draw stars with LOD and aggressive culling
-		const maxRenderDistance = 20000.0 // Much more aggressive culling
-		const maxStarsPerFrame = 15000     // Limit total stars rendered
+		const maxRenderDistance = MaxRenderDistance // Much more aggressive culling
+		const maxStarsPerFrame = MaxStarsPerFrame // Limit total stars rendered
 
 		for _, star := range galaxy.Stars {
 			if starsRendered >= maxStarsPerFrame {
@@ -1162,9 +1223,9 @@ func main() {
 		// Draw center reticle/crosshair
 		centerX := screenWidth / 2
 		centerY := screenHeight / 2
-		reticleSize := int32(10)
-		reticleThickness := int32(2)
-		reticleGap := int32(4)
+		reticleSize := int32(UIReticleSize)
+		reticleThickness := int32(UIReticleThickness)
+		reticleGap := int32(UIReticleGap)
 		reticleColor := rl.NewColor(255, 255, 255, 180) // Semi-transparent white
 
 		// Draw crosshair lines (horizontal and vertical)
@@ -1190,12 +1251,10 @@ func main() {
 
 		// Draw Time Control UI (always visible)
 		timeBoxX := int32(10)
-		timeBoxY := screenHeight - 120
-		timeBoxWidth := int32(480)
-		timeBoxHeight := int32(110)
+		timeBoxY := screenHeight - int32(UITimeBoxHeight) - 10
 
-		rl.DrawRectangle(timeBoxX, timeBoxY, timeBoxWidth, timeBoxHeight, rl.NewColor(0, 0, 0, 200))
-		rl.DrawRectangleLines(timeBoxX, timeBoxY, timeBoxWidth, timeBoxHeight, rl.NewColor(100, 200, 100, 255))
+		rl.DrawRectangle(timeBoxX, timeBoxY, UITimeBoxWidth, UITimeBoxHeight, rl.NewColor(0, 0, 0, 200))
+		rl.DrawRectangleLines(timeBoxX, timeBoxY, UITimeBoxWidth, UITimeBoxHeight, rl.NewColor(100, 200, 100, 255))
 
 		timeYPos := timeBoxY + 10
 		if galaxy.TimeScale.IsPaused {
@@ -1268,6 +1327,4 @@ func main() {
 
 		rl.EndDrawing()
 	}
-
-	rl.CloseWindow()
 }

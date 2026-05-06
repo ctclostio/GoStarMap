@@ -389,48 +389,39 @@ func (lc *LightingConfig) ApplyToShader(planetRenderer *PlanetRenderData) {
 		return
 	}
 
-	// Get additional uniform locations (extend PlanetRenderData if needed)
-	// These will be added to the shader in the enhanced version
-	locSunColorTemp := rl.GetShaderLocation(planetRenderer.Shader, "sunColorTemperature")
-	locAmbientColor := rl.GetShaderLocation(planetRenderer.Shader, "ambientColorSaturation")
-	locHemispheric := rl.GetShaderLocation(planetRenderer.Shader, "hemisphericAmbient")
-	locFresnelStrength := rl.GetShaderLocation(planetRenderer.Shader, "fresnelStrength")
-	locTerminatorSoft := rl.GetShaderLocation(planetRenderer.Shader, "terminatorSoftness")
-	locRimStrength := rl.GetShaderLocation(planetRenderer.Shader, "rimLightStrength")
-	locRimColor := rl.GetShaderLocation(planetRenderer.Shader, "rimLightColor")
-	locProximityWarmth := rl.GetShaderLocation(planetRenderer.Shader, "proximityWarmth")
-	locProximityStrength := rl.GetShaderLocation(planetRenderer.Shader, "proximityWarmthStrength")
+	// Use cached uniform locations (set during InitPlanetRenderer)
+	// This avoids expensive GetShaderLocation calls every frame
 
-	// Set all uniforms
+	// Set all uniforms using cached locations
 	rl.SetShaderValue(planetRenderer.Shader, planetRenderer.LocSunIntensity,
 		[]float32{lc.SunIntensity}, rl.ShaderUniformFloat)
 
 	rl.SetShaderValue(planetRenderer.Shader, planetRenderer.LocAmbientStrength,
 		[]float32{lc.AmbientStrength}, rl.ShaderUniformFloat)
 
-	rl.SetShaderValue(planetRenderer.Shader, locSunColorTemp,
+	rl.SetShaderValue(planetRenderer.Shader, planetRenderer.LocSunColorTemp,
 		[]float32{lc.SunColorTemperature}, rl.ShaderUniformFloat)
 
-	rl.SetShaderValue(planetRenderer.Shader, locAmbientColor,
+	rl.SetShaderValue(planetRenderer.Shader, planetRenderer.LocAmbientColorSat,
 		[]float32{lc.AmbientColorSaturation}, rl.ShaderUniformFloat)
 
 	hemisphericFloat := float32(0.0)
 	if lc.HemisphericAmbient {
 		hemisphericFloat = 1.0
 	}
-	rl.SetShaderValue(planetRenderer.Shader, locHemispheric,
+	rl.SetShaderValue(planetRenderer.Shader, planetRenderer.LocHemisphericAmbient,
 		[]float32{hemisphericFloat}, rl.ShaderUniformFloat)
 
-	rl.SetShaderValue(planetRenderer.Shader, locFresnelStrength,
+	rl.SetShaderValue(planetRenderer.Shader, planetRenderer.LocFresnelStrength,
 		[]float32{lc.FresnelStrength}, rl.ShaderUniformFloat)
 
-	rl.SetShaderValue(planetRenderer.Shader, locTerminatorSoft,
+	rl.SetShaderValue(planetRenderer.Shader, planetRenderer.LocTerminatorSoftness,
 		[]float32{lc.TerminatorSoftness}, rl.ShaderUniformFloat)
 
-	rl.SetShaderValue(planetRenderer.Shader, locRimStrength,
+	rl.SetShaderValue(planetRenderer.Shader, planetRenderer.LocRimLightStrength,
 		[]float32{lc.RimLightStrength}, rl.ShaderUniformFloat)
 
-	rl.SetShaderValue(planetRenderer.Shader, locRimColor,
+	rl.SetShaderValue(planetRenderer.Shader, planetRenderer.LocRimLightColor,
 		[]float32{lc.RimLightColor.X, lc.RimLightColor.Y, lc.RimLightColor.Z},
 		rl.ShaderUniformVec3)
 
@@ -438,10 +429,10 @@ func (lc *LightingConfig) ApplyToShader(planetRenderer *PlanetRenderData) {
 	if lc.ProximityWarmth {
 		proximityFloat = 1.0
 	}
-	rl.SetShaderValue(planetRenderer.Shader, locProximityWarmth,
+	rl.SetShaderValue(planetRenderer.Shader, planetRenderer.LocProximityWarmth,
 		[]float32{proximityFloat}, rl.ShaderUniformFloat)
 
-	rl.SetShaderValue(planetRenderer.Shader, locProximityStrength,
+	rl.SetShaderValue(planetRenderer.Shader, planetRenderer.LocProximityStrength,
 		[]float32{lc.ProximityWarmthStrength}, rl.ShaderUniformFloat)
 }
 
