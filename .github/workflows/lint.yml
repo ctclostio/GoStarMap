@@ -1,0 +1,47 @@
+name: Lint
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.61
+
+  test:
+    name: go test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      # The orbital and internal/celestial packages are pure Go; package main
+      # imports raylib-go (purego) which expects libraylib.so at runtime, but
+      # we don't run main here — we just build it and run the subpackage tests
+      # that don't trigger raylib's init.
+      - name: Run tests in pure-Go subpackages
+        run: go test ./orbital/... ./internal/...
+
+      - name: Vet
+        run: go vet ./...

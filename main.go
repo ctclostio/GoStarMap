@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"math"
 	"math/rand"
@@ -91,8 +92,26 @@ func (g *Galaxy) AddNamedStar(name string, x, y, z float64, mag float32, stype c
 	})
 }
 
-// GenerateGalaxy creates a procedural galaxy with realistic structure
-func GenerateGalaxy() *Galaxy {
+// NamedStarsOnly returns just the named stars (Sun + nearby labelled stars).
+// Used for cheap iteration in features that don't care about the procedural
+// 100k-star background — e.g., constellation lines, "fly to nearest star".
+func (g *Galaxy) NamedStarsOnly() []Star {
+	out := make([]Star, 0, 16)
+	for _, s := range g.Stars {
+		if s.IsNamed {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// GenerateGalaxy creates a procedural galaxy with realistic structure.
+// targetStars controls how many procedural background stars are generated;
+// pass 0 for the default of 100,000.
+func GenerateGalaxy(targetStars int) *Galaxy {
+	if targetStars <= 0 {
+		targetStars = 100000
+	}
 	g := NewGalaxy()
 
 	fmt.Println("Generating galaxy...")
@@ -176,7 +195,6 @@ func GenerateGalaxy() *Galaxy {
 	fmt.Printf("Added %d named stars\n", len(g.Stars))
 
 	// 3. Generate procedural stars with galactic disk structure
-	const targetStars = 100000 // With optimizations, we can handle 100k!
 	fmt.Printf("Generating %d procedural stars...\n", targetStars)
 
 	// Galactic parameters
@@ -834,13 +852,64 @@ func RenderAllPlanets(planetRenderer *PlanetRenderData, planets []Planet, sunPos
 	}
 }
 
-func main() {
-	// Initialize window
-	screenWidth := int32(1920)
-	screenHeight := int32(1080)
+// teleport repositions the camera near the targeted planet (or near the Sun if
+// targetingSun is true) and updates the yaw/pitch scalars so the camera ends
+// up looking at the target. Returns the new yaw/pitch. If nothing is targeted,
+// the inputs are returned unchanged.
+func teleport(camera *rl.Camera3D, planet *Planet, targetingSun bool, yaw, pitch float32) (float32, float32) {
+	var targetPos rl.Vector3
+	var standoff float32
+	switch {
+	case planet != nil:
+		targetPos = rl.Vector3{X: float32(planet.X), Y: float32(planet.Y), Z: float32(planet.Z)}
+		standoff = planet.Radius * PlanetSizeScale * 8.0
+		if standoff < 50 {
+			standoff = 50 // never end up inside the body
+		}
+	case targetingSun:
+		targetPos = rl.Vector3{}
+		standoff = SunRadiusUnits * 4.0
+	default:
+		return yaw, pitch
+	}
 
-	rl.InitWindow(screenWidth, screenHeight, "GoStarMap - 3D Galactic Navigation [100k Stars - Optimized]")
+	// Direction from target back toward the camera; preserves the user's
+	// approach angle. Fall back to a fixed offset if the camera is on top of
+	// the target somehow.
+	dir := rl.Vector3Subtract(camera.Position, targetPos)
+	if rl.Vector3Length(dir) < 0.01 {
+		dir = rl.Vector3{X: 1, Y: 0.3, Z: 1}
+	}
+	dir = rl.Vector3Normalize(dir)
+	camera.Position = rl.Vector3Add(targetPos, rl.Vector3Scale(dir, standoff))
+
+	// Re-aim at the target.
+	fwd := rl.Vector3Normalize(rl.Vector3Subtract(targetPos, camera.Position))
+	camera.Target = rl.Vector3Add(camera.Position, fwd)
+	newYaw := float32(math.Atan2(float64(fwd.X), float64(fwd.Z)))
+	newPitch := float32(math.Asin(float64(fwd.Y)))
+	return newYaw, newPitch
+}
+
+func main() {
+	// CLI flags — runtime knobs that used to be hardcoded.
+	width := flag.Int("width", 1920, "window width in pixels")
+	height := flag.Int("height", 1080, "window height in pixels")
+	stars := flag.Int("stars", 100000, "number of procedural background stars")
+	fullscreen := flag.Bool("fullscreen", false, "open in fullscreen mode at the requested resolution")
+	flag.Parse()
+
+	screenWidth := int32(*width)
+	screenHeight := int32(*height)
+
+	// Allow the user to resize the window at runtime; we re-query screen
+	// dimensions every frame so the HUD reflows.
+	rl.SetConfigFlags(rl.FlagWindowResizable)
+	rl.InitWindow(screenWidth, screenHeight, "GoStarMap - 3D Galactic Navigation")
 	defer rl.CloseWindow()
+	if *fullscreen {
+		rl.ToggleFullscreen()
+	}
 	rl.SetTargetFPS(60)
 
 	// Initialize camera - positioned to view Sun and inner planets
@@ -854,7 +923,8 @@ func main() {
 	}
 
 	// Generate galaxy (this will take a moment)
-	galaxy := GenerateGalaxy()
+	galaxy := GenerateGalaxy(*stars)
+	namedStars := galaxy.NamedStarsOnly()
 
 	// Initialize Sun renderer
 	sunRenderer, err := InitSunRenderer(screenWidth, screenHeight)
@@ -899,11 +969,16 @@ func main() {
 	fmt.Println("\nTime Controls:")
 	fmt.Println("  P - Pause/Resume time")
 	fmt.Println("  [ ] - Decrease/Increase time speed")
+	fmt.Println("  \\ - Reverse time direction")
+	fmt.Println("  J - Jump to J2000.0 epoch (reset clock)")
 	fmt.Println("  1 - 1 day per second")
 	fmt.Println("  2 - 1 week per second")
 	fmt.Println("  3 - 1 month per second")
 	fmt.Println("  4 - Earth orbit in 60 seconds (default)")
 	fmt.Println("  5 - 1 year per second")
+	fmt.Println("\nNavigation:")
+	fmt.Println("  F - Teleport to the targeted planet/Sun")
+	fmt.Println("  C - Toggle constellation lines from Sun to named stars")
 	fmt.Println("\nFeatures:")
 	fmt.Println("  - Realistic Keplerian orbital mechanics")
 	fmt.Println("  - Validated orbital elements from JPL Horizons System")
@@ -917,6 +992,7 @@ func main() {
 
 	starsRendered := 0
 	showStats := true
+	showConstellations := false
 
 	startTime := rl.GetTime()
 
@@ -931,6 +1007,11 @@ func main() {
 
 	// Main game loop
 	for !rl.WindowShouldClose() {
+		// Re-query window dimensions — the user can resize the window via OS
+		// chrome thanks to FlagWindowResizable.
+		screenWidth = int32(rl.GetScreenWidth())
+		screenHeight = int32(rl.GetScreenHeight())
+
 		// Check if shift is held for speed boost
 		shiftHeld := rl.IsKeyDown(rl.KeyLeftShift) || rl.IsKeyDown(rl.KeyRightShift)
 		cameraSpeed := GetCameraSpeed(camera, shiftHeld)
@@ -996,18 +1077,25 @@ func main() {
 			galaxy.TimeScale.IsPaused = !galaxy.TimeScale.IsPaused
 		}
 		if rl.IsKeyPressed(rl.KeyLeftBracket) {
-			// Slow down time (divide by 2)
 			galaxy.TimeScale.TimeScale /= 2.0
-			if galaxy.TimeScale.TimeScale < 0.01 {
-				galaxy.TimeScale.TimeScale = 0.01 // Minimum speed
-			}
 		}
 		if rl.IsKeyPressed(rl.KeyRightBracket) {
-			// Speed up time (multiply by 2)
 			galaxy.TimeScale.TimeScale *= 2.0
-			if galaxy.TimeScale.TimeScale > 36525.6 {
-				galaxy.TimeScale.TimeScale = 36525.6 // Maximum: 100 years/second
+			// Clamp magnitude (preserve sign) so reverse-time can also speed up.
+			const maxAbs = 36525.6 // 100 years/second
+			if math.Abs(galaxy.TimeScale.TimeScale) > maxAbs {
+				if galaxy.TimeScale.TimeScale > 0 {
+					galaxy.TimeScale.TimeScale = maxAbs
+				} else {
+					galaxy.TimeScale.TimeScale = -maxAbs
+				}
 			}
+		}
+		if rl.IsKeyPressed(rl.KeyBackSlash) {
+			galaxy.TimeScale.TimeScale = -galaxy.TimeScale.TimeScale
+		}
+		if rl.IsKeyPressed(rl.KeyJ) {
+			galaxy.TimeScale.SimulationDays = 0
 		}
 		if rl.IsKeyPressed(rl.KeyOne) {
 			galaxy.TimeScale.TimeScale = 1.0 // 1 day per second
@@ -1023,6 +1111,17 @@ func main() {
 		}
 		if rl.IsKeyPressed(rl.KeyFive) {
 			galaxy.TimeScale.TimeScale = 365.256 // 1 year per second
+		}
+
+		// Toggle constellation lines.
+		if rl.IsKeyPressed(rl.KeyC) {
+			showConstellations = !showConstellations
+		}
+
+		// F = teleport to whatever the camera is targeting. Sun is at origin.
+		if rl.IsKeyPressed(rl.KeyF) {
+			tp, sun := CheckTargeting(camera, galaxy.Planets, rl.Vector3{})
+			yaw, pitch = teleport(&camera, tp, sun, yaw, pitch)
 		}
 
 		// Update simulation time
@@ -1054,6 +1153,20 @@ func main() {
 
 		// Draw planets first (before Sun, so Sun glows over them)
 		RenderAllPlanets(planetRenderer, galaxy.Planets, sunPos, camera)
+
+		// Constellation lines: subtle rays from the Sun out to each named
+		// star. Helps you see the local stellar neighborhood at a glance.
+		if showConstellations {
+			lineColor := rl.NewColor(80, 80, 130, 90)
+			for _, ns := range namedStars {
+				if ns.Name == "Sun" {
+					continue
+				}
+				rl.DrawLine3D(sunPos,
+					rl.Vector3{X: float32(ns.X), Y: float32(ns.Y), Z: float32(ns.Z)},
+					lineColor)
+			}
+		}
 
 		// Draw stars with LOD and aggressive culling
 		const maxRenderDistance = MaxRenderDistance // Much more aggressive culling
@@ -1140,20 +1253,22 @@ func main() {
 		rl.DrawText(fmt.Sprintf("Date: %.1f (J2000 + %.1f days)", displayYear, galaxy.TimeScale.SimulationDays), timeBoxX+15, timeYPos, 14, rl.RayWhite)
 		timeYPos += 20
 
-		// Show time scale
+		// Show time scale (use absolute value for unit selection so the
+		// formatter doesn't switch units when reverse-time crosses 0).
 		var timeScaleStr string
-		if galaxy.TimeScale.TimeScale < 1.0 {
+		absScale := math.Abs(galaxy.TimeScale.TimeScale)
+		switch {
+		case absScale < 1.0:
 			timeScaleStr = fmt.Sprintf("%.2f days/sec", galaxy.TimeScale.TimeScale)
-		} else if galaxy.TimeScale.TimeScale < 365.256 {
+		case absScale < 365.256:
 			timeScaleStr = fmt.Sprintf("%.1f days/sec", galaxy.TimeScale.TimeScale)
-		} else {
-			yearsPerSec := galaxy.TimeScale.TimeScale / 365.256
-			timeScaleStr = fmt.Sprintf("%.2f years/sec", yearsPerSec)
+		default:
+			timeScaleStr = fmt.Sprintf("%.2f years/sec", galaxy.TimeScale.TimeScale/365.256)
 		}
 		rl.DrawText(fmt.Sprintf("Speed: %s", timeScaleStr), timeBoxX+15, timeYPos, 14, rl.RayWhite)
 		timeYPos += 20
 
-		rl.DrawText("P=Pause  [/]=Slower/Faster  1-5=Presets", timeBoxX+15, timeYPos, 12, rl.Gray)
+		rl.DrawText("P=Pause  [/]=Slower/Faster  \\=Reverse  J=Reset  1-5=Presets", timeBoxX+15, timeYPos, 12, rl.Gray)
 
 		// Draw UI
 		if showStats {
@@ -1161,7 +1276,7 @@ func main() {
 			rl.DrawText(fmt.Sprintf("GoStarMap - Milky Way Galaxy [%d total stars]", len(galaxy.Stars)), 10, yPos, 20, rl.RayWhite)
 			yPos += 25
 
-			rl.DrawText("TAB=Toggle Stats | WASD=Move | Shift=Boost | Space/Ctrl=Up/Down | Mouse=Look | ESC=Exit", 10, yPos, 14, rl.Gray)
+			rl.DrawText("TAB=Stats | WASD=Move | Shift=Boost | Space/Ctrl=Up/Down | Mouse=Look | F=Teleport | C=Constellations | ESC=Exit", 10, yPos, 14, rl.Gray)
 			yPos += 20
 
 			camInfo := fmt.Sprintf("Pos: (%.0f, %.0f, %.0f) | Speed: %.1f",
