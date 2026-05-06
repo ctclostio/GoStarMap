@@ -6,46 +6,38 @@ import (
 	"math/rand"
 	"strings"
 
+	"github.com/ctclostio/GoStarMap/internal/celestial"
 	"github.com/ctclostio/GoStarMap/orbital"
-	
+
 	rl "github.com/gen2brain/raylib-go/raylib"
 )
 
-// SpectralType represents stellar classification
-type SpectralType int
+// spectralColors maps each Morgan-Keenan spectral class to a display color.
+// Defined here (not in the celestial package) because rl.Color is a raylib
+// type and we want celestial to stay raylib-free for testability.
+var spectralColors = map[celestial.SpectralType]rl.Color{
+	celestial.TypeO: rl.NewColor(155, 176, 255, 255), // Blue
+	celestial.TypeB: rl.NewColor(170, 191, 255, 255), // Blue-white
+	celestial.TypeA: rl.NewColor(202, 215, 255, 255), // White
+	celestial.TypeF: rl.NewColor(248, 247, 255, 255), // Yellow-white
+	celestial.TypeG: rl.NewColor(255, 244, 234, 255), // Yellow
+	celestial.TypeK: rl.NewColor(255, 210, 161, 255), // Orange
+	celestial.TypeM: rl.NewColor(255, 204, 111, 255), // Red
+}
 
-const (
-	TypeO SpectralType = iota // Blue
-	TypeB                      // Blue-white
-	TypeA                      // White
-	TypeF                      // Yellow-white
-	TypeG                      // Yellow (like our Sun)
-	TypeK                      // Orange
-	TypeM                      // Red
-)
-
-// GetSpectralColor returns the color for a spectral type
-func GetSpectralColor(stype SpectralType) rl.Color {
-	colors := map[SpectralType]rl.Color{
-		TypeO: rl.NewColor(155, 176, 255, 255), // Blue
-		TypeB: rl.NewColor(170, 191, 255, 255), // Blue-white
-		TypeA: rl.NewColor(202, 215, 255, 255), // White
-		TypeF: rl.NewColor(248, 247, 255, 255), // Yellow-white
-		TypeG: rl.NewColor(255, 244, 234, 255), // Yellow
-		TypeK: rl.NewColor(255, 210, 161, 255), // Orange
-		TypeM: rl.NewColor(255, 204, 111, 255), // Red
-	}
-	return colors[stype]
+// GetSpectralColor returns the color for a spectral type.
+func GetSpectralColor(stype celestial.SpectralType) rl.Color {
+	return spectralColors[stype]
 }
 
 // Star represents a star with astronomical properties
 type Star struct {
-	X, Y, Z       float64      // Position in render units
-	Magnitude     float32      // Visual magnitude (brightness)
-	SpectralType  SpectralType // Spectral classification
-	Name          string       // Name (if notable)
-	IsNamed       bool         // Whether this star has a name
-	Color         rl.Color    // Precomputed color based on spectral type
+	X, Y, Z      float64                // Position in render units
+	Magnitude    float32                // Visual magnitude (brightness)
+	SpectralType celestial.SpectralType // Spectral classification
+	Name         string                 // Name (if notable)
+	IsNamed      bool                   // Whether this star has a name
+	Color        rl.Color               // Precomputed color based on spectral type
 }
 
 // Planet represents a planet with scientific data and orbital mechanics
@@ -85,31 +77,8 @@ func NewGalaxy() *Galaxy {
 	}
 }
 
-// GetRandomSpectralType returns a spectral type based on realistic distribution.
-// Cumulative thresholds chosen so per-bin shares match observed Milky Way ratios:
-// O 0.003%, B 0.13%, A 0.6%, F 3%, G 7.6%, K 12.1%, M ~76.6% (remainder).
-func GetRandomSpectralType() SpectralType {
-	r := rand.Float32()
-	switch {
-	case r < 0.00003:
-		return TypeO
-	case r < 0.00133:
-		return TypeB
-	case r < 0.00733:
-		return TypeA
-	case r < 0.03733:
-		return TypeF
-	case r < 0.11333:
-		return TypeG
-	case r < 0.23433:
-		return TypeK
-	default:
-		return TypeM
-	}
-}
-
 // AddNamedStar adds a notable star with a name
-func (g *Galaxy) AddNamedStar(name string, x, y, z float64, mag float32, stype SpectralType) {
+func (g *Galaxy) AddNamedStar(name string, x, y, z float64, mag float32, stype celestial.SpectralType) {
 	g.Stars = append(g.Stars, Star{
 		X:            x,
 		Y:            y,
@@ -129,7 +98,7 @@ func GenerateGalaxy() *Galaxy {
 	fmt.Println("Generating galaxy...")
 
 	// 1. Add our solar system at origin
-	g.AddNamedStar("Sun", 0, 0, 0, -26.74, TypeG)
+	g.AddNamedStar("Sun", 0, 0, 0, -26.74, celestial.TypeG)
 
 	// Add planets with validated scientific data and orbital mechanics
 	// Data validated against JPL Horizons System and NASA Planetary Fact Sheets (2025-10-31)
@@ -185,19 +154,19 @@ func GenerateGalaxy() *Galaxy {
 	// 2. Add nearby named stars
 	const lyScale = 50.0
 	nearbyStars := []struct {
-		name     string
-		x, y, z  float64 // in light-years
-		mag      float32
-		stype    SpectralType
+		name    string
+		x, y, z float64 // in light-years
+		mag     float32
+		stype   celestial.SpectralType
 	}{
-		{"Proxima Centauri", 4.24, 0.5, -1.2, 11.13, TypeM},
-		{"Alpha Centauri A", 4.37, 0.6, -1.1, -0.01, TypeG},
-		{"Barnard's Star", 5.96, 1.2, 0.8, 9.53, TypeM},
-		{"Sirius", 8.6, -2.5, 3.1, -1.46, TypeA},
-		{"Procyon", 11.4, 3.0, 2.0, 0.38, TypeF},
-		{"61 Cygni", 11.4, 5.0, -3.0, 5.2, TypeK},
-		{"Epsilon Eridani", 10.5, -2.0, 4.0, 3.73, TypeK},
-		{"Tau Ceti", 11.9, 1.0, -5.0, 3.49, TypeG},
+		{"Proxima Centauri", 4.24, 0.5, -1.2, 11.13, celestial.TypeM},
+		{"Alpha Centauri A", 4.37, 0.6, -1.1, -0.01, celestial.TypeG},
+		{"Barnard's Star", 5.96, 1.2, 0.8, 9.53, celestial.TypeM},
+		{"Sirius", 8.6, -2.5, 3.1, -1.46, celestial.TypeA},
+		{"Procyon", 11.4, 3.0, 2.0, 0.38, celestial.TypeF},
+		{"61 Cygni", 11.4, 5.0, -3.0, 5.2, celestial.TypeK},
+		{"Epsilon Eridani", 10.5, -2.0, 4.0, 3.73, celestial.TypeK},
+		{"Tau Ceti", 11.9, 1.0, -5.0, 3.49, celestial.TypeG},
 	}
 
 	for _, s := range nearbyStars {
@@ -262,7 +231,7 @@ func GenerateGalaxy() *Galaxy {
 		}
 
 		// Get spectral type
-		stype := GetRandomSpectralType()
+		stype := celestial.RandomType()
 
 		g.Stars = append(g.Stars, Star{
 			X:            x,
@@ -429,13 +398,13 @@ func DrawCelestialInfo(screenWidth, screenHeight int32, planet *Planet, isSun bo
 		rl.DrawText(fmt.Sprintf("Mass: %.2f x 10^%d kg", massMantissa, int(massExp)), boxX+15, yOffset, 14, rl.RayWhite)
 		yOffset += 20
 
-		rl.DrawText(fmt.Sprintf("Diameter: %s km", formatNumber(planet.DiameterKm)), boxX+15, yOffset, 14, rl.RayWhite)
+		rl.DrawText(fmt.Sprintf("Diameter: %s km", celestial.FormatNumber(planet.DiameterKm)), boxX+15, yOffset, 14, rl.RayWhite)
 		yOffset += 20
 
 		rl.DrawText(fmt.Sprintf("Semi-major Axis: %.3f AU", planet.OrbitalElements.SemiMajorAxis), boxX+15, yOffset, 14, rl.RayWhite)
 		yOffset += 20
 
-		rl.DrawText(fmt.Sprintf("Orbital Period: %s days", formatNumber(planet.OrbitalElements.OrbitalPeriod)), boxX+15, yOffset, 14, rl.RayWhite)
+		rl.DrawText(fmt.Sprintf("Orbital Period: %s days", celestial.FormatNumber(planet.OrbitalElements.OrbitalPeriod)), boxX+15, yOffset, 14, rl.RayWhite)
 		yOffset += 20
 
 		earthYears := planet.OrbitalElements.OrbitalPeriod / 365.256
@@ -448,53 +417,6 @@ func DrawCelestialInfo(screenWidth, screenHeight int32, planet *Planet, isSun bo
 		inclinationDeg := planet.OrbitalElements.Inclination * (180.0 / math.Pi)
 		rl.DrawText(fmt.Sprintf("Inclination: %.2f degrees", inclinationDeg), boxX+15, yOffset, 14, rl.RayWhite)
 	}
-}
-
-// formatNumber adds commas to numbers for readability
-// Handles negative numbers and preserves decimal places
-func formatNumber(num float64) string {
-	// Format with up to 2 decimal places (strip trailing zeros)
-	str := fmt.Sprintf("%.2f", num)
-	
-	// Remove trailing zeros after decimal point, and trailing decimal point
-	if strings.Contains(str, ".") {
-		str = strings.TrimRight(strings.TrimRight(str, "0"), ".")
-	}
-	
-	// Handle negative numbers
-	prefix := ""
-	if strings.HasPrefix(str, "-") {
-		prefix = "-"
-		str = str[1:]
-	}
-	
-	// Split into integer and decimal parts
-	parts := strings.SplitN(str, ".", 2)
-	intPart := parts[0]
-	decPart := ""
-	if len(parts) > 1 {
-		decPart = "." + parts[1]
-	}
-	
-	// Add commas to integer part
-	n := len(intPart)
-	if n <= 3 {
-		return prefix + intPart + decPart
-	}
-	
-	var result strings.Builder
-	result.Grow(n + n/3 + 2) // Pre-allocate space
-	result.WriteString(prefix)
-	
-	for i, c := range intPart {
-		if i > 0 && (n-i)%3 == 0 {
-			result.WriteByte(',')
-		}
-		result.WriteRune(c)
-	}
-	
-	result.WriteString(decPart)
-	return result.String()
 }
 
 // UpdatePlanetPositions recalculates planet positions based on current simulation time
