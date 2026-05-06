@@ -3,25 +3,17 @@ package orbital
 // TimeScaleInfo contains information about simulation time advancement
 type TimeScaleInfo struct {
 	SimulationDays float64 // Days since J2000.0 in simulation
-	RealTimeDelta  float64 // Real seconds elapsed since last frame
 	TimeScale      float64 // Multiplier: simulation days per real second
 	IsPaused       bool    // Whether time is paused
 }
 
-// UpdateSimulationTime advances the simulation time based on real-time delta
-// Returns the new simulation time in days since J2000.0
+// UpdateSimulationTime advances the simulation time based on real-time delta.
+// Returns the new simulation time in days since J2000.0.
 func UpdateSimulationTime(info *TimeScaleInfo, realDeltaSeconds float64) float64 {
 	if info.IsPaused {
 		return info.SimulationDays
 	}
-
-	// Convert real seconds to simulation days
-	// timeScale is in simulation days per real second
-	deltaDays := realDeltaSeconds * info.TimeScale
-
-	info.SimulationDays += deltaDays
-	info.RealTimeDelta = realDeltaSeconds
-
+	info.SimulationDays += realDeltaSeconds * info.TimeScale
 	return info.SimulationDays
 }
 

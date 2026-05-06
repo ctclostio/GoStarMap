@@ -176,99 +176,64 @@ func NewLightingConfig() *LightingConfig {
 	return config
 }
 
-// ApplyPreset loads a predefined lighting configuration
+// lightingPresets is the data table behind ApplyPreset. Adding a new preset
+// is a one-liner: define its values here and add a constant above.
+// Fields not set in an entry (RimLightColor, ShowNormals, ShowLightDirection)
+// are preserved from the live config rather than zeroed.
+var lightingPresets = map[PresetType]LightingConfig{
+	PresetRealistic: {
+		SunIntensity: 1.8, SunColorTemperature: 0.1,
+		AmbientStrength: 0.12, AmbientColorSaturation: 0.3, HemisphericAmbient: true,
+		SpecularRocky: 0.1, SpecularGas: 0.3, ShininessRocky: 16.0, ShininessGas: 64.0,
+		FresnelStrength: 0.15, TerminatorSoftness: 0.05, RimLightStrength: 0.0,
+		ProximityWarmth: true, ProximityWarmthStrength: 0.1,
+		CurrentPreset: "Realistic",
+	},
+	PresetCinematic: {
+		SunIntensity: 2.0, SunColorTemperature: 0.25,
+		AmbientStrength: 0.02, AmbientColorSaturation: 0.4, HemisphericAmbient: true,
+		SpecularRocky: 0.15, SpecularGas: 0.5, ShininessRocky: 32.0, ShininessGas: 128.0,
+		FresnelStrength: 0.25, TerminatorSoftness: 0.08, RimLightStrength: 0.15,
+		ProximityWarmth: true, ProximityWarmthStrength: 0.15,
+		CurrentPreset: "Cinematic",
+	},
+	PresetEducational: {
+		SunIntensity: 1.2, SunColorTemperature: 0.05,
+		AmbientStrength: 0.18, AmbientColorSaturation: 0.4, HemisphericAmbient: false,
+		SpecularRocky: 0.12, SpecularGas: 0.35, ShininessRocky: 20.0, ShininessGas: 80.0,
+		FresnelStrength: 0.1, TerminatorSoftness: 0.1, RimLightStrength: 0.1,
+		ProximityWarmth: false, ProximityWarmthStrength: 0.0,
+		CurrentPreset: "Educational",
+	},
+	PresetStylized: {
+		SunIntensity: 1.4, SunColorTemperature: 0.3,
+		AmbientStrength: 0.15, AmbientColorSaturation: 0.6, HemisphericAmbient: true,
+		SpecularRocky: 0.2, SpecularGas: 0.6, ShininessRocky: 24.0, ShininessGas: 96.0,
+		FresnelStrength: 0.3, TerminatorSoftness: 0.12, RimLightStrength: 0.25,
+		ProximityWarmth: true, ProximityWarmthStrength: 0.2,
+		CurrentPreset: "Stylized",
+	},
+	PresetDark: {
+		SunIntensity: 1.1, SunColorTemperature: 0.15,
+		AmbientStrength: 0.01, AmbientColorSaturation: 0.2, HemisphericAmbient: true,
+		SpecularRocky: 0.08, SpecularGas: 0.25, ShininessRocky: 20.0, ShininessGas: 80.0,
+		FresnelStrength: 0.2, TerminatorSoftness: 0.03, RimLightStrength: 0.05,
+		ProximityWarmth: true, ProximityWarmthStrength: 0.08,
+		CurrentPreset: "Dark",
+	},
+}
+
+// ApplyPreset loads a predefined lighting configuration.
 func (lc *LightingConfig) ApplyPreset(preset PresetType) {
-	switch preset {
-	case PresetRealistic:
-		// Physically accurate lighting (default)
-		lc.SunIntensity = 1.8 // Bright sun for good visibility
-		lc.SunColorTemperature = 0.1 // Slight warmth
-		lc.AmbientStrength = 0.12 // Balanced ambient to see dark sides while preserving contrast
-		lc.AmbientColorSaturation = 0.3
-		lc.HemisphericAmbient = true
-		lc.SpecularRocky = 0.1
-		lc.SpecularGas = 0.3
-		lc.ShininessRocky = 16.0
-		lc.ShininessGas = 64.0
-		lc.FresnelStrength = 0.15
-		lc.TerminatorSoftness = 0.05
-		lc.RimLightStrength = 0.0
-		lc.ProximityWarmth = true
-		lc.ProximityWarmthStrength = 0.1
-		lc.CurrentPreset = "Realistic"
-
-	case PresetCinematic:
-		// High contrast, dramatic lighting
-		lc.SunIntensity = 2.0 // Very bright sun
-		lc.SunColorTemperature = 0.25
-		lc.AmbientStrength = 0.02 // Very dark shadows for high contrast
-		lc.AmbientColorSaturation = 0.4
-		lc.HemisphericAmbient = true
-		lc.SpecularRocky = 0.15
-		lc.SpecularGas = 0.5
-		lc.ShininessRocky = 32.0 // Tighter highlights
-		lc.ShininessGas = 128.0
-		lc.FresnelStrength = 0.25
-		lc.TerminatorSoftness = 0.08
-		lc.RimLightStrength = 0.15
-		lc.ProximityWarmth = true
-		lc.ProximityWarmthStrength = 0.15
-		lc.CurrentPreset = "Cinematic"
-
-	case PresetEducational:
-		// Maximum visibility, all features clear
-		lc.SunIntensity = 1.2
-		lc.SunColorTemperature = 0.05
-		lc.AmbientStrength = 0.18 // Brighter dark sides
-		lc.AmbientColorSaturation = 0.4
-		lc.HemisphericAmbient = false
-		lc.SpecularRocky = 0.12
-		lc.SpecularGas = 0.35
-		lc.ShininessRocky = 20.0
-		lc.ShininessGas = 80.0
-		lc.FresnelStrength = 0.1
-		lc.TerminatorSoftness = 0.1
-		lc.RimLightStrength = 0.1
-		lc.ProximityWarmth = false
-		lc.ProximityWarmthStrength = 0.0
-		lc.CurrentPreset = "Educational"
-
-	case PresetStylized:
-		// Artistic, enhanced features
-		lc.SunIntensity = 1.4
-		lc.SunColorTemperature = 0.3
-		lc.AmbientStrength = 0.15
-		lc.AmbientColorSaturation = 0.6 // Rich colors
-		lc.HemisphericAmbient = true
-		lc.SpecularRocky = 0.2
-		lc.SpecularGas = 0.6
-		lc.ShininessRocky = 24.0
-		lc.ShininessGas = 96.0
-		lc.FresnelStrength = 0.3
-		lc.TerminatorSoftness = 0.12
-		lc.RimLightStrength = 0.25
-		lc.ProximityWarmth = true
-		lc.ProximityWarmthStrength = 0.2
-		lc.CurrentPreset = "Stylized"
-
-	case PresetDark:
-		// Moody, low light, high contrast
-		lc.SunIntensity = 1.1
-		lc.SunColorTemperature = 0.15
-		lc.AmbientStrength = 0.01 // Minimal ambient for dramatic shadows
-		lc.AmbientColorSaturation = 0.2
-		lc.HemisphericAmbient = true
-		lc.SpecularRocky = 0.08
-		lc.SpecularGas = 0.25
-		lc.ShininessRocky = 20.0
-		lc.ShininessGas = 80.0
-		lc.FresnelStrength = 0.2
-		lc.TerminatorSoftness = 0.03
-		lc.RimLightStrength = 0.05
-		lc.ProximityWarmth = true
-		lc.ProximityWarmthStrength = 0.08
-		lc.CurrentPreset = "Dark"
+	cfg, ok := lightingPresets[preset]
+	if !ok {
+		return
 	}
+	// Preserve fields not controlled by presets.
+	cfg.RimLightColor = lc.RimLightColor
+	cfg.ShowNormals = lc.ShowNormals
+	cfg.ShowLightDirection = lc.ShowLightDirection
+	*lc = cfg
 }
 
 // ============================================================================

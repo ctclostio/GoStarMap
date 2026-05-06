@@ -552,17 +552,14 @@ func UpdatePlanetRotations(galaxy *Galaxy) {
 // SUN RENDERING SYSTEM
 // ============================================================================
 
-// SunRenderData contains all resources needed for photorealistic Sun rendering
+// SunRenderData contains the shader and parameters for the Sun's HDR-emissive
+// rendering. The bloom post-process pipeline that previously lived here was
+// never actually used at the call site; it has been removed. The GLSL files
+// in shaders/ remain in case bloom is reintroduced later.
 type SunRenderData struct {
-	Shader          rl.Shader
-	RenderTexture   rl.RenderTexture2D
-	BloomTexture    rl.RenderTexture2D
-	BloomBlurTemp   rl.RenderTexture2D
-	ExtractShader   rl.Shader
-	BlurShader      rl.Shader
-	CompositeShader rl.Shader
-	SunRadius       float32
-	IsInitialized   bool
+	Shader        rl.Shader
+	SunRadius     float32
+	IsInitialized bool
 }
 
 // PlanetRenderData contains resources for planet lighting system
@@ -604,11 +601,8 @@ type PlanetRenderData struct {
 
 // Physical Sun parameters
 const (
-	SunRadiusUnits   = 32.7  // Physically accurate: 109x Earth radius (0.3 units)
-	SunDistanceScale = 1.0   // Sun at origin
-	BloomThreshold   = 1.0   // HDR brightness threshold for bloom
-	BloomIntensity   = 0.35  // Bloom effect strength
-	ExposureValue    = 1.2   // HDR exposure
+	SunRadiusUnits   = 32.7 // Physically accurate: 109x Earth radius (0.3 units)
+	SunDistanceScale = 1.0  // Sun at origin
 
 	// AU Scale: Distance scaling for orbital distances
 	// True scale would be 7,030 units/AU (215 Sun radii per AU)
@@ -660,62 +654,32 @@ const (
 	UITimeBoxHeight    = 110
 )
 
-// InitSunRenderer initializes all resources for Sun rendering with bloom
-// Expected cost: One-time initialization, ~20ms
-// Memory: ~12MB for render textures at 1920x1080
+// InitSunRenderer loads the Sun shader and prepares the render data.
+// The screenWidth/screenHeight parameters are kept on the signature for
+// compatibility but are no longer used now that the bloom render textures
+// have been removed.
 func InitSunRenderer(screenWidth, screenHeight int32) (*SunRenderData, error) {
-	sun := &SunRenderData{
-		SunRadius: SunRadiusUnits,
-	}
+	_ = screenWidth
+	_ = screenHeight
+	sun := &SunRenderData{SunRadius: SunRadiusUnits}
 
-	// Load Sun shader
 	sunShader := rl.LoadShader("shaders/sun.vs", "shaders/sun.fs")
 	if sunShader.ID == 0 {
 		return nil, fmt.Errorf("failed to load Sun shader")
 	}
 	sun.Shader = sunShader
 
-	// Load bloom post-processing shaders
-	sun.ExtractShader = rl.LoadShader("shaders/default.vs", "shaders/bloom_extract.fs")
-	if sun.ExtractShader.ID == 0 {
-		return nil, fmt.Errorf("failed to load bloom extract shader")
-	}
-
-	sun.BlurShader = rl.LoadShader("shaders/default.vs", "shaders/bloom_blur.fs")
-	if sun.BlurShader.ID == 0 {
-		return nil, fmt.Errorf("failed to load bloom blur shader")
-	}
-
-	sun.CompositeShader = rl.LoadShader("shaders/default.vs", "shaders/bloom_composite.fs")
-	if sun.CompositeShader.ID == 0 {
-		return nil, fmt.Errorf("failed to load bloom composite shader")
-	}
-
-	// Create render textures for HDR rendering and bloom
-	// Using half resolution for bloom textures saves memory and improves performance
-	sun.RenderTexture = rl.LoadRenderTexture(screenWidth, screenHeight)
-	sun.BloomTexture = rl.LoadRenderTexture(screenWidth/2, screenHeight/2)
-	sun.BloomBlurTemp = rl.LoadRenderTexture(screenWidth/2, screenHeight/2)
-
 	sun.IsInitialized = true
 	fmt.Println("Sun renderer initialized successfully")
 	return sun, nil
 }
 
-// UnloadSunRenderer cleans up all Sun rendering resources
+// Unload releases the Sun shader.
 func (sun *SunRenderData) Unload() {
 	if !sun.IsInitialized {
 		return
 	}
-
 	rl.UnloadShader(sun.Shader)
-	rl.UnloadShader(sun.ExtractShader)
-	rl.UnloadShader(sun.BlurShader)
-	rl.UnloadShader(sun.CompositeShader)
-	rl.UnloadRenderTexture(sun.RenderTexture)
-	rl.UnloadRenderTexture(sun.BloomTexture)
-	rl.UnloadRenderTexture(sun.BloomBlurTemp)
-
 	sun.IsInitialized = false
 }
 
@@ -761,26 +725,6 @@ func RenderSun(sun *SunRenderData, camera rl.Camera3D, time float32) {
 	rl.EndShaderMode()
 }
 
-// RenderSunWithBloom renders the Sun with full HDR bloom pipeline
-// This is the main rendering function that should be called from the game loop
-// Expected total cost: 0.8-1.2ms @ 1080p on RTX 3070 / GTX 1660
-func RenderSunWithBloom(sun *SunRenderData, camera rl.Camera3D, time float32, screenWidth, screenHeight int32) {
-	if !sun.IsInitialized {
-		// Fallback: render simple sun without bloom
-		sunPos := rl.Vector3{X: 0, Y: 0, Z: 0}
-		rl.DrawSphere(sunPos, sun.SunRadius, rl.Gold)
-		return
-	}
-
-	// Just render the Sun directly with the shader
-	// The shader already has HDR emission built-in
-	// For now, we'll skip the full bloom pipeline to keep it simple
-	RenderSun(sun, camera, time)
-
-	// TODO: Optional bloom pipeline for even more dramatic effect
-	// This would require rendering to texture first, then post-processing
-	// Skipped for now to maintain simplicity and performance
-}
 
 // ============================================================================
 // PLANET RENDERING SYSTEM
@@ -1215,8 +1159,12 @@ func main() {
 			}
 		}
 
-		// Draw the Sun last so it glows brightly on top
-		RenderSunWithBloom(sunRenderer, camera, elapsedTime, screenWidth, screenHeight)
+		// Draw the Sun last so it glows brightly on top.
+		if sunRenderer.IsInitialized {
+			RenderSun(sunRenderer, camera, elapsedTime)
+		} else {
+			rl.DrawSphere(rl.Vector3{}, sunRenderer.SunRadius, rl.Gold)
+		}
 
 		rl.EndMode3D()
 
